@@ -31,7 +31,7 @@ generic_proc_close(struct ndpi_net *n,
 	if(w_buf) {
 		if(w_buf->cpos ) {
 			if(ndpi_log_debug > 1)
-			    pr_info("%s: cmd %d:%s\n",__func__,
+			    pr_info("%s:%s cmd %d:%s\n",__func__,n->ns_name,
 					    w_buf->cpos,&w_buf->cmd[0]);
 			ret = (parse_line)(n,&w_buf->cmd[0]);
 		}
@@ -47,7 +47,7 @@ struct write_proc_cmd * alloc_proc_wbuf(struct ndpi_net *n,
 	ret = n->w_buff[id];
 	if(!ret) {
 		ret = kmalloc(sizeof(struct write_proc_cmd) + cmd_len_max + 1,
-				GFP_KERNEL);
+				GFP_ATOMIC); // under spin_lock
 		if(ret) {
 			ret->max = cmd_len_max;
 			ret->cpos = 0;
@@ -78,30 +78,31 @@ generic_proc_write(struct ndpi_net *n, const char __user *buffer,
 	skip = w_buf->cpos == w_buf->max - 1;
 
 	while(pos < length) {
-		l = min(length,sizeof(buf)-1);
+		l = min(length-pos,sizeof(buf)-1);
 	
 		memset(buf,0,sizeof(buf));
 		if (!(ACCESS_OK(VERIFY_READ, buffer+pos, l) && 
 			!__copy_from_user(&buf[0], buffer+pos, l)))
 			        return -EFAULT;
-		for(i = 0; i < l; i++) {
+		for(i = 0; i < l; (*loff)++,i++) {
 			c = buf[i];
 			if(c == '\n' || !c) {
 				if(w_buf->cpos) {
 					if(ndpi_log_debug > 1)
-					    pr_info("%s: cmd %d:%s\n", __func__,
-							    w_buf->cpos,&w_buf->cmd[0]);
+					    pr_info("%s:%s POS %lld cmd %d:'%s' i %d\n", __func__,n->ns_name,
+							   *loff,w_buf->cpos,&w_buf->cmd[0],i);
 					r = (parse_line)(n,&w_buf->cmd[0]);
+					memset(&w_buf->cmd[0],0,w_buf->cpos);
+					skip = 0;
+					w_buf->cpos = 0;
+					if(r) return -EINVAL;
 				}
-				skip = 0;
-				w_buf->cpos = 0;
-				memset(&w_buf->cmd[0],0,cmd_size);
-				if(r) return -EINVAL;
 			} else {
 				if(w_buf->cpos < w_buf->max - 1)
 					w_buf->cmd[w_buf->cpos++] = c;
 				    else {
-					    if(!skip) pr_err("xt_ndpi: Command too long\n");
+					    if(!skip)
+						pr_err("xt_ndpi:%s Command too long\n",n->ns_name);
 					    skip = 1;
 					}
 			}

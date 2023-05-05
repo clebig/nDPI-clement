@@ -306,7 +306,7 @@ if(!proto) { // udp
 
 #ifdef NDPI_IPPORT_DEBUG
 ndpi_print_port_range(pd1->p,pd1->count[0]+pd1->count[1],dbuf,sizeof(dbuf),ndpi_str);
-printk("%s: res %d,%d %s\n",__func__,pd1->count[0],pd1->count[1],dbuf);
+pr_info("%s: res %d,%d %s\n",__func__,pd1->count[0],pd1->count[1],dbuf);
 #endif
 
 ndpi_free(pd);
@@ -349,7 +349,7 @@ tp = &pd->p[i];
 k = 0;
 
 #ifdef NDPI_IPPORT_DEBUG
-#define DD1 printk("%s: k=%d tmp %d-%d i=%d tp %d-%d np %d-%d \n", \
+#define DD1 pr_info("%s: k=%d tmp %d-%d i=%d tp %d-%d np %d-%d \n", \
 		__func__,k,tmp[k].start,tmp[k].end,i,tp->start,tp->end,np->start,np->end);
 #else
 #define DD1
@@ -413,7 +413,7 @@ check_eq_proto:
 {
 char dbuf[128];
 ndpi_print_port_range(tmp,k,dbuf,sizeof(dbuf),ndpi_str);
-printk("%s: k=%d: %s\n",__func__,k,dbuf);
+pr_info("%s: k=%d: %s\n",__func__,k,dbuf);
 }
 #endif
 
@@ -648,6 +648,7 @@ int parse_ndpi_proto(struct ndpi_net *n,char *cmd) {
  * hexID disable
  * hexID enable (ToDo)
  * add_custom name
+ * netns name
  */
 	while(*v && (*v == ' ' || *v == '\t')) v++;
 	if(*v == '#') return 0;
@@ -667,6 +668,23 @@ int parse_ndpi_proto(struct ndpi_net *n,char *cmd) {
 		}
 		break;
 	}
+	if(!strcmp(hid,"netns")) {
+		char *e;
+		// v -> name of custom protocol
+		for(e = v; *e && *e != ' ' && *e != '\t'; e++) { // first space or eol
+			if(*e < ' ' || strchr("/&^:;\\\"'",*e)) {
+				if(*e < ' ')
+				    pr_err("NDPI: can't use '\\0x%x' in NS  name\n",*e & 0xff);
+				  else
+				    pr_err("NDPI: can't use '%c' in NS name\n",*e & 0xff);
+				return 1;
+			}
+		}
+		if(*e) *e = '\0';
+		strncpy(n->ns_name,v,sizeof(n->ns_name)-1);
+		return 0;
+	}
+
 	for(m = v; *m && *m != '/';m++);
 
 	if(*m) {
@@ -706,10 +724,6 @@ int parse_ndpi_proto(struct ndpi_net *n,char *cmd) {
 				pr_err("NDPI: '%s' exists\n",v);
 				return 0;
 			}
-			if(atomic_read(&n->protocols_cnt[0])) {
-				pr_err("NDPI: iptables in use. can't create custom protocol! See README\n");
-				return 1;
-			}
 			v--;
 			*v = '@';
 			id = ndpi_handle_rule(n->ndpi_struct, v , 1);
@@ -724,19 +738,20 @@ int parse_ndpi_proto(struct ndpi_net *n,char *cmd) {
 			n->mark[e_proto].mask = 0x1ff;
 			return 0;
 		}
-
-		if(kstrtoint(hid,16,&id)) {
+		if(!any && !all) {
+		    if(kstrtoint(hid,16,&id)) {
 			id = -1;
 			id = ndpi_get_proto_by_name(n->ndpi_struct,hid);
 			if(id == NDPI_PROTOCOL_UNKNOWN && !(all || any)) {
 				pr_err("NDPI: '%s' unknown protocol or not hexID\n",hid);
 				return 1;
 			}
-		} else {
+		    } else {
 			if(id < 0 || id >= NDPI_NUM_BITS) {
 				pr_err("NDPI: bad id %d\n",id);
 				id = -1;
 			}
+		    }
 		}
 		if(!strncmp(v,"debug",5)) {
 #ifdef NDPI_ENABLE_DEBUG_MESSAGES
@@ -793,14 +808,14 @@ int parse_ndpi_proto(struct ndpi_net *n,char *cmd) {
 			}
 		    }
 		}
-//		printk("NDPI: proto %s id %d mark %x mask %s\n",
+//		pr_info("NDPI: proto %s id %d mark %x mask %s\n",
 //				hid,id,mark,m);
 		if(atomic_read(&n->protocols_cnt[0]) &&
 			!mark && !mask) {
 			pr_err("NDPI: iptables in use! Can't disable protocol\n");
 			return 1;
 		}
-		if(id != -1) {
+		if(id >= 0) {
 			n->mark[id].mark = mark;
 			if(*m) 	n->mark[id].mask = mask;
 			return 0;
@@ -814,7 +829,7 @@ int parse_ndpi_proto(struct ndpi_net *n,char *cmd) {
 			n->mark[i].mark = mark;
 			if(*m) 	n->mark[i].mask = mask;
 			ok++;
-//			printk("Proto %s id %02x mark %08x/%08x\n",
+//			pr_info("Proto %s id %02x mark %08x/%08x\n",
 //					cmd,i,n->mark[i].mark,n->mark[i].mask);
 		}
 		return 0;
